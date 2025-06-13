@@ -14,9 +14,7 @@
 
 use super::{nonce::Nonce, overlapping, quic::Sample, NONCE_LEN};
 use crate::{
-    bb,
     cpu::{self, GetFeature as _},
-    error,
     polyfill::unwrap_const,
 };
 use cfg_if::cfg_if;
@@ -65,21 +63,14 @@ pub(super) enum Key {
 
 impl Key {
     #[inline]
-    pub fn new(
-        bytes: KeyBytes<'_>,
-        cpu_features: cpu::Features,
-    ) -> Result<Self, error::Unspecified> {
+    pub fn new(bytes: KeyBytes<'_>, cpu_features: cpu::Features) -> Self {
         #[cfg(any(
             all(target_arch = "aarch64", target_endian = "little"),
             target_arch = "x86",
             target_arch = "x86_64"
         ))]
         if let Some(hw_features) = cpu_features.get_feature() {
-            return Ok(Self::Hw(hw::Key::new(
-                bytes,
-                hw_features,
-                cpu_features.get_feature(),
-            )?));
+            return Self::Hw(hw::Key::new(bytes, hw_features, cpu_features.get_feature()));
         }
 
         #[cfg(any(
@@ -89,12 +80,12 @@ impl Key {
             target_arch = "x86"
         ))]
         if let Some(vp_features) = cpu_features.get_feature() {
-            return Ok(Self::Vp(vp::Key::new(bytes, vp_features)?));
+            return Self::Vp(vp::Key::new(bytes, vp_features));
         }
 
         let _ = cpu_features;
 
-        Ok(Self::Fallback(fallback::Key::new(bytes)?))
+        Self::Fallback(fallback::Key::new(bytes))
     }
 
     #[inline]
@@ -157,6 +148,10 @@ impl Counter {
         let new_value = old_value.wrapping_add(increment_by.get());
         [*c0, *c1, *c2, *c3] = u32::to_be_bytes(new_value);
     }
+
+    fn as_bytes_less_safe(&self) -> &[u8; BLOCK_LEN] {
+        &self.0
+    }
 }
 
 /// The IV for a single block encryption.
@@ -186,15 +181,6 @@ pub(super) trait EncryptCtr32 {
 #[allow(dead_code)]
 fn encrypt_block_using_encrypt_iv_xor_block(key: &impl EncryptBlock, block: Block) -> Block {
     key.encrypt_iv_xor_block(Iv(block), ZERO_BLOCK)
-}
-
-fn encrypt_iv_xor_block_using_encrypt_block(
-    key: &impl EncryptBlock,
-    iv: Iv,
-    block: Block,
-) -> Block {
-    let encrypted_iv = key.encrypt_block(iv.0);
-    bb::xor_16(encrypted_iv, block)
 }
 
 #[allow(dead_code)]
@@ -233,7 +219,7 @@ mod tests {
             32 => KeyBytes::AES_256(key.try_into().unwrap()),
             _ => unreachable!(),
         };
-        Key::new(key, cpu::features()).unwrap()
+        Key::new(key, cpu::features())
     }
 }
 

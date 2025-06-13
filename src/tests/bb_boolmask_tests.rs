@@ -1,4 +1,4 @@
-// Copyright 2018 Brian Smith.
+// Copyright 2015-2025 Brian Smith.
 //
 // Permission to use, copy, modify, and/or distribute this software for any
 // purpose with or without fee is hereby granted, provided that the above
@@ -12,21 +12,16 @@
 // OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-#[cfg(target_arch = "x86")]
-pub fn shift_full_blocks<const BLOCK_LEN: usize>(
-    in_out: super::overlapping::Overlapping<'_, u8>,
-    mut transform: impl FnMut(&[u8; BLOCK_LEN]) -> [u8; BLOCK_LEN],
-) {
-    let (in_out, src) = in_out.into_slice_src_mut();
-    let in_out_len = in_out[src.clone()].len();
+use crate::bb::BoolMask;
 
-    for i in (0..in_out_len).step_by(BLOCK_LEN) {
-        let block = {
-            let input =
-                <&[u8; BLOCK_LEN]>::try_from(&in_out[(src.start + i)..][..BLOCK_LEN]).unwrap();
-            transform(input)
-        };
-        let output = <&mut [u8; BLOCK_LEN]>::try_from(&mut in_out[i..][..BLOCK_LEN]).unwrap();
-        *output = block;
-    }
+fn leak_in_test(a: BoolMask) -> bool {
+    a.leak()
+}
+
+#[test]
+fn test_bool_mask_bitwise_and_is_logical_and() {
+    assert!(leak_in_test(BoolMask::TRUE & BoolMask::TRUE));
+    assert!(!leak_in_test(BoolMask::TRUE & BoolMask::FALSE));
+    assert!(!leak_in_test(BoolMask::FALSE & BoolMask::TRUE));
+    assert!(!leak_in_test(BoolMask::FALSE & BoolMask::FALSE));
 }

@@ -18,17 +18,13 @@
     target_arch = "x86_64"
 ))]
 
-use super::{ffi::KeyValue, HTable, UpdateBlock, Xi};
-use crate::aead::gcm::ffi::BLOCK_LEN;
+use super::{
+    ffi::{KeyValue, BLOCK_LEN},
+    HTable, UpdateBlock, Xi,
+};
 use crate::cpu;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use {super::UpdateBlocks, crate::polyfill::slice::AsChunks};
-
-#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-pub(in super::super) type RequiredCpuFeatures = cpu::arm::PMull;
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-pub(in super::super) type RequiredCpuFeatures = (cpu::intel::ClMul, cpu::intel::Ssse3);
 
 #[derive(Clone)]
 pub struct Key {
@@ -36,10 +32,40 @@ pub struct Key {
 }
 
 impl Key {
-    #[cfg_attr(target_arch = "x86_64", inline(never))]
-    pub(in super::super) fn new(value: KeyValue, _cpu: RequiredCpuFeatures) -> Self {
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    pub(in super::super) fn new(value: KeyValue, _cpu: cpu::aarch64::PMull) -> Self {
+        prefixed_extern! {
+            fn gcm_init_clmul(HTable: *mut HTable, h: &KeyValue);
+        }
         Self {
-            h_table: unsafe { htable_new!(gcm_init_clmul, value) },
+            h_table: HTable::new(|table| unsafe { gcm_init_clmul(table, &value) }),
+        }
+    }
+
+    #[cfg(target_arch = "x86")]
+    pub(in super::super) fn new(
+        value: KeyValue,
+        _cpu: (cpu::intel::ClMul, cpu::intel::Ssse3),
+    ) -> Self {
+        prefixed_extern! {
+            fn gcm_init_clmul(HTable: *mut HTable, h: &KeyValue);
+        }
+        Self {
+            h_table: HTable::new(|htable| unsafe { gcm_init_clmul(htable, &value) }),
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(never)]
+    pub(in super::super) fn new(
+        value: KeyValue,
+        _cpu: (cpu::intel::ClMul, cpu::intel::Ssse3),
+    ) -> Self {
+        prefixed_extern! {
+            fn gcm_init_clmul(HTable: *mut HTable, h: &KeyValue);
+        }
+        Self {
+            h_table: HTable::new(|table| unsafe { gcm_init_clmul(table, &value) }),
         }
     }
 
@@ -68,6 +94,17 @@ impl UpdateBlock for Key {
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 impl UpdateBlocks for Key {
     fn update_blocks(&self, xi: &mut Xi, input: AsChunks<u8, { BLOCK_LEN }>) {
-        unsafe { ghash!(gcm_ghash_clmul, xi, &self.h_table, input) }
+        prefixed_extern! {
+            fn gcm_ghash_clmul(
+                xi: &mut Xi,
+                Htable: &HTable,
+                inp: *const u8,
+                len: crate::c::NonZero_size_t,
+            );
+        }
+        let htable = &self.h_table;
+        super::ffi::with_non_dangling_ptr(input, |input, len| unsafe {
+            gcm_ghash_clmul(xi, htable, input, len)
+        })
     }
 }

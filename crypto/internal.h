@@ -337,26 +337,6 @@ static inline int constant_time_declassify_int(int v) {
 // were secret.
 #define declassify_assert(expr) dev_assert_secret(constant_time_declassify_int(expr))
 
-// Endianness conversions.
-
-#if defined(__GNUC__) && __GNUC__ >= 2
-static inline uint32_t CRYPTO_bswap4(uint32_t x) {
-  return __builtin_bswap32(x);
-}
-
-static inline uint64_t CRYPTO_bswap8(uint64_t x) {
-  return __builtin_bswap64(x);
-}
-#elif defined(_MSC_VER)
-#pragma warning(push, 3)
-#include <stdlib.h>
-#pragma warning(pop)
-#pragma intrinsic(_byteswap_ulong)
-static inline uint32_t CRYPTO_bswap4(uint32_t x) {
-  return _byteswap_ulong(x);
-}
-#endif
-
 #if !defined(RING_CORE_NOSTDLIBINC)
 #include <string.h>
 #endif
@@ -393,77 +373,11 @@ static inline void *OPENSSL_memset(void *dst, int c, size_t n) {
 }
 
 
-// Loads and stores.
-//
-// The following functions load and store sized integers with the specified
-// endianness. They use |memcpy|, and so avoid alignment or strict aliasing
-// requirements on the input and output pointers.
-
-#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__)
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-#define RING_BIG_ENDIAN
-#endif
-#endif
-
-static inline uint32_t CRYPTO_load_u32_le(const void *in) {
-  uint32_t v;
-  OPENSSL_memcpy(&v, in, sizeof(v));
-#if defined(RING_BIG_ENDIAN)
-  return CRYPTO_bswap4(v);
-#else
-  return v;
-#endif
-}
-
-static inline void CRYPTO_store_u32_le(void *out, uint32_t v) {
-#if defined(RING_BIG_ENDIAN)
-  v = CRYPTO_bswap4(v);
-#endif
-  OPENSSL_memcpy(out, &v, sizeof(v));
-}
-
-static inline uint32_t CRYPTO_load_u32_be(const void *in) {
-  uint32_t v;
-  OPENSSL_memcpy(&v, in, sizeof(v));
-#if !defined(RING_BIG_ENDIAN)
-  return CRYPTO_bswap4(v);
-#else
-  return v;
-#endif
-}
-
-static inline void CRYPTO_store_u32_be(void *out, uint32_t v) {
-#if !defined(RING_BIG_ENDIAN)
-  v = CRYPTO_bswap4(v);
-#endif
-  OPENSSL_memcpy(out, &v, sizeof(v));
-}
-
 // Runtime CPU feature support
 
-#if defined(OPENSSL_X86) || defined(OPENSSL_X86_64)
-// OPENSSL_ia32cap_P contains the Intel CPUID bits when running on an x86 or
-// x86-64 system.
-//
-//   Index 0:
-//     EDX for CPUID where EAX = 1
-//     Bit 30 is used to indicate an Intel CPU
-//   Index 1:
-//     ECX for CPUID where EAX = 1
-//   Index 2:
-//     EBX for CPUID where EAX = 7, ECX = 0
-//     Bit 14 (for removed feature MPX) is used to indicate a preference for ymm
-//       registers over zmm even when zmm registers are supported
-//   Index 3:
-//     ECX for CPUID where EAX = 7, ECX = 0
-//
-// Note: the CPUID bits are pre-adjusted for the OSXSAVE bit and the XMM, YMM,
-// and AVX512 bits in XCR0, so it is not necessary to check those. (WARNING: See
-// caveats in cpu_intel.c.)
 #if defined(OPENSSL_X86_64)
 extern uint32_t avx2_available;
 extern uint32_t adx_bmi2_available;
-#endif
 #endif
 
 

@@ -28,30 +28,36 @@ mod as_chunks_mut;
 pub use as_chunks::{as_chunks, AsChunks};
 pub use as_chunks_mut::{as_chunks_mut, AsChunksMut};
 
-// TODO(MSRV feature(split_at_checked)): Use `slice::split_at_checked`.
+// TODO(MSRV-1.80): Use `slice::split_at_checked`.
 //
 // Note that the libcore version is implemented in terms of
 // `slice::split_at_unchecked()`, and `slice::split_at()` was changed to be
 // implemented in terms of `split_at_checked`. For now, we implement this in
 // terms of `split_at` and rely on the optimizer to eliminate the panic.
-#[inline(always)]
-pub fn split_at_checked<T>(slice: &[T], i: usize) -> Option<(&[T], &[T])> {
-    if slice.len() >= i {
-        Some(slice.split_at(i))
+#[inline]
+pub fn split_at_checked<T>(slice: &[T], mid: usize) -> Option<(&[T], &[T])> {
+    if slice.len() >= mid {
+        Some(slice.split_at(mid))
+    } else {
+        None
+    }
+}
+
+// TODO(MSRV-1.80): Use `slice::split_at_checked`.
+#[inline]
+pub fn split_at_mut_checked<T>(slice: &mut [T], mid: usize) -> Option<(&mut [T], &mut [T])> {
+    if slice.len() >= mid {
+        Some(slice.split_at_mut(mid))
     } else {
         None
     }
 }
 
 // TODO(MSRV-1.77): Use `slice::split_first_chunk_mut`.
-#[inline(always)]
+#[inline]
 pub fn split_first_chunk_mut<T, const N: usize>(
     slice: &mut [T],
 ) -> Option<(&mut [T; N], &mut [T])> {
-    if slice.len() >= N {
-        let (head, tail) = slice.split_at_mut(N);
-        head.try_into().ok().map(|head| (head, tail))
-    } else {
-        None
-    }
+    let (head, tail) = split_at_mut_checked(slice, N)?;
+    head.try_into().ok().map(|head| (head, tail))
 }

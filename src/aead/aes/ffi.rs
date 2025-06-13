@@ -12,8 +12,8 @@
 // OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-use super::{Block, KeyBytes, Overlapping, BLOCK_LEN};
-use crate::{bits::BitLength, c, error};
+use super::{KeyBytes, Overlapping, BLOCK_LEN};
+use crate::{bits::BitLength, c};
 use core::{
     ffi::{c_int, c_uint},
     num::{NonZeroU32, NonZeroUsize},
@@ -23,15 +23,15 @@ use core::{
 #[repr(transparent)]
 pub(in super::super) struct Counter(pub(super) [u8; BLOCK_LEN]);
 
-// Keep this in sync with AES_KEY in aes.h.
+// `AES_KEY` in BoringSSL's aes.h.
 #[repr(C)]
 #[derive(Clone)]
 pub(in super::super) struct AES_KEY {
-    pub rd_key: [u32; 4 * (MAX_ROUNDS + 1)],
+    pub rd_key: [[u32; 4]; MAX_ROUNDS + 1],
     pub rounds: c_uint,
 }
 
-// Keep this in sync with `AES_MAXNR` in aes.h.
+// `AES_MAXNR` in BoringSSL's aes.h.
 const MAX_ROUNDS: usize = 14;
 
 impl AES_KEY {
@@ -39,11 +39,8 @@ impl AES_KEY {
     pub(super) unsafe fn new(
         f: unsafe extern "C" fn(*const u8, BitLength<c_int>, *mut AES_KEY) -> c_int,
         bytes: KeyBytes<'_>,
-    ) -> Result<Self, error::Unspecified> {
-        let mut key = Self {
-            rd_key: [0; 4 * (MAX_ROUNDS + 1)],
-            rounds: 0,
-        };
+    ) -> Self {
+        let mut key = Self::invalid_zero();
 
         let (bytes, key_bits) = match bytes {
             KeyBytes::AES_128(bytes) => (&bytes[..], BitLength::from_bits(128)),
@@ -51,11 +48,15 @@ impl AES_KEY {
         };
 
         // Unusually, in this case zero means success and non-zero means failure.
-        if 0 == unsafe { f(bytes.as_ptr(), key_bits, &mut key) } {
-            debug_assert_ne!(key.rounds, 0); // Sanity check initialization.
-            Ok(key)
-        } else {
-            Err(error::Unspecified)
+        let r = unsafe { f(bytes.as_ptr(), key_bits, &mut key) };
+        assert_eq!(r, 0);
+        key
+    }
+
+    pub(super) fn invalid_zero() -> Self {
+        Self {
+            rd_key: [[0; 4]; MAX_ROUNDS + 1],
+            rounds: 0,
         }
     }
 }
@@ -66,10 +67,7 @@ impl AES_KEY {
         f: for<'a> unsafe extern "C" fn(*mut AES_KEY, &'a AES_KEY),
         src: &Self,
     ) -> Self {
-        let mut r = AES_KEY {
-            rd_key: [0u32; 4 * (MAX_ROUNDS + 1)],
-            rounds: 0,
-        };
+        let mut r = Self::invalid_zero();
         unsafe { f(&mut r, src) };
         r
     }
@@ -83,9 +81,8 @@ impl AES_KEY {
 //  * The function `$name` must read `bits` bits from `user_key`; `bits` will
 //    always be a valid AES key length, i.e. a whole number of bytes.
 //  * `$name` must set `key.rounds` to the value expected by the corresponding
-//    encryption/decryption functions and return 0, or otherwise must return
-//    non-zero to indicate failure.
-//  * `$name` may inspect CPU features.
+//    encryption/decryption functions.
+//  * `$name` must return 1 when given 128 or 256 for `bits`.
 //
 // In BoringSSL, the C prototypes for these are in
 // crypto/fipsmodule/aes/internal.h.
@@ -98,31 +95,6 @@ macro_rules! set_encrypt_key {
         }
         $crate::aead::aes::ffi::AES_KEY::new($name, $key_bytes)
     }};
-}
-
-macro_rules! encrypt_block {
-    ($name:ident, $block:expr, $key:expr) => {{
-        use crate::aead::aes::{ffi::AES_KEY, Block};
-        prefixed_extern! {
-            fn $name(a: &Block, r: *mut Block, key: &AES_KEY);
-        }
-        $key.encrypt_block($name, $block)
-    }};
-}
-
-impl AES_KEY {
-    #[inline]
-    pub(super) unsafe fn encrypt_block(
-        &self,
-        f: unsafe extern "C" fn(&Block, *mut Block, &AES_KEY),
-        a: Block,
-    ) -> Block {
-        let mut result = core::mem::MaybeUninit::uninit();
-        unsafe {
-            f(&a, result.as_mut_ptr(), self);
-            result.assume_init()
-        }
-    }
 }
 
 /// SAFETY:
@@ -159,7 +131,7 @@ impl AES_KEY {
     ///     with any nonnegative offset `n` (i.e. `input == output.add(n)`);
     ///     `f` does NOT need to support the cases where input < output.
     ///   * `key` must have been initialized with the `set_encrypt_key!` invocation
-    ///      that corresponds to `f`.
+    ///     that corresponds to `f`.
     ///   * `f` may inspect CPU features.
     #[inline]
     pub(super) unsafe fn ctr32_encrypt_blocks(

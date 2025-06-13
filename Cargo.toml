@@ -49,9 +49,8 @@ include = [
     "crypto/curve25519/curve25519_64_adx.c",
     "crypto/curve25519/curve25519_tables.h",
     "crypto/curve25519/internal.h",
-    "crypto/fipsmodule/aes/aes_nohw.c",
-    "crypto/fipsmodule/aes/asm/aes-gcm-avx2-x86_64.pl",
     "crypto/fipsmodule/aes/asm/aesni-x86.pl",
+    "crypto/fipsmodule/aes/asm/aes-gcm-avx2-x86_64.pl",
     "crypto/fipsmodule/aes/asm/aesni-gcm-x86_64.pl",
     "crypto/fipsmodule/aes/asm/aesni-x86_64.pl",
     "crypto/fipsmodule/aes/asm/aesv8-armx.pl",
@@ -100,23 +99,19 @@ include = [
     "crypto/limbs/limbs.c",
     "crypto/limbs/limbs.h",
     "crypto/limbs/limbs.inl",
-    "crypto/mem.c",
     "crypto/perlasm/arm-xlate.pl",
     "crypto/perlasm/x86asm.pl",
     "crypto/perlasm/x86gas.pl",
     "crypto/perlasm/x86nasm.pl",
     "crypto/perlasm/x86_64-xlate.pl",
-    "crypto/poly1305/poly1305.c",
     "crypto/poly1305/poly1305_arm.c",
     "crypto/poly1305/poly1305_arm_asm.S",
     "crypto/cipher/asm/chacha20_poly1305_armv8.pl",
     "crypto/cipher/asm/chacha20_poly1305_x86_64.pl",
     "examples/**/*.rs",
-    "include/ring-core/aes.h",
     "include/ring-core/asm_base.h",
     "include/ring-core/base.h",
     "include/ring-core/check.h",
-    "include/ring-core/mem.h",
     "include/ring-core/target.h",
     "include/ring-core/type_check.h",
     "src/**/*.rs",
@@ -163,19 +158,19 @@ getrandom = { version = "0.2.10" }
 untrusted = { version = "0.9" }
 
 [target.'cfg(all(any(all(target_arch = "aarch64", target_endian = "little"), all(target_arch = "arm", target_endian = "little")), any(target_os = "android", target_os = "linux")))'.dependencies]
-libc = { version = "0.2.148", default-features = false }
+libc = { version = "0.2.172", default-features = false }
 
 [target.'cfg(all(all(target_arch = "aarch64", target_endian = "little"), target_vendor = "apple", any(target_os = "ios", target_os = "macos", target_os = "tvos", target_os = "visionos", target_os = "watchos")))'.dependencies]
-libc = { version = "0.2.155", default-features = false }
+libc = { version = "0.2.172", default-features = false }
 
 [target.'cfg(all(all(target_arch = "aarch64", target_endian = "little"), target_os = "windows"))'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = { version = "0.3.37", default-features = false, features = ["std"] }
 
 [target.'cfg(any(unix, windows, target_os = "wasi"))'.dev-dependencies]
-libc = { version = "0.2.148", default-features = false }
+libc = { version = "0.2.172", default-features = false }
 
 [build-dependencies]
 cc = { version = "1.2.8", default-features = false }
@@ -200,17 +195,19 @@ wasm32_unknown_unknown_js = ["getrandom/js"]
 opt-level = 3
 debug = false
 rpath = false
-lto = true
+lto = false
 debug-assertions = false
 codegen-units = 1
+overflow-checks = true
 
 [profile.release]
 opt-level = 3
 debug = false
 rpath = false
-lto = true
+lto = false
 debug-assertions = false
 codegen-units = 1
+overflow-checks = true
 
 [workspace]
 members = [

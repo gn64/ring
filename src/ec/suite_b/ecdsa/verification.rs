@@ -65,10 +65,10 @@ impl signature::VerificationAlgorithm for EcdsaVerificationAlgorithm {
             // NSA Guide Step 3: "Convert the bit string H to an integer e as
             // described in Appendix B.2."
             let n = &self.ops.scalar_ops.scalar_modulus(cpu);
-            digest_scalar(n, h)
+            digest_scalar(n, &h)
         };
 
-        self.verify_digest(public_key, e, signature)
+        self.verify_digest(public_key, e, signature, cpu)
     }
 }
 
@@ -79,9 +79,8 @@ impl EcdsaVerificationAlgorithm {
         public_key: untrusted::Input,
         e: Scalar,
         signature: untrusted::Input,
+        cpu: cpu::Features,
     ) -> Result<(), error::Unspecified> {
-        let cpu = cpu::features();
-
         // NSA Suite B Implementer's Guide to ECDSA Section 3.4.2.
 
         let public_key_ops = self.ops.public_key_ops;
@@ -322,6 +321,7 @@ mod tests {
                     untrusted::Input::from(&public_key[..]),
                     digest,
                     untrusted::Input::from(&sig[..]),
+                    cpu,
                 );
                 assert_eq!(actual_result.is_ok(), invalid.is_none());
 

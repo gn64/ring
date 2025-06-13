@@ -437,7 +437,7 @@ _aesni_ctr32_ghash_6x:
 ___
 ######################################################################
 #
-# size_t aesni_gcm_[en|de]crypt(const void *inp, void *out, size_t len,
+# void aesni_gcm_[en|de]crypt(const void *inp, void *out, size_t len,
 #		const AES_KEY *key, unsigned char iv[16], const u128 Htbl[9],
 #		u128 *Xip);
 $code.=<<___;
@@ -448,12 +448,9 @@ aesni_gcm_decrypt:
 .cfi_startproc
 .seh_startproc
 	_CET_ENDBR
-	xor	%rax,%rax
 
 	# We call |_aesni_ctr32_ghash_6x|, which requires at least 96 (0x60)
-	# bytes of input.
-	cmp	\$0x60,$len			# minimal accepted length
-	jb	.Lgcm_dec_abort
+	# bytes of input. Unlike upstream, we require the caller to check this.
 
 	push	%rbp
 .cfi_push	%rbp
@@ -615,7 +612,6 @@ $code.=<<___;
 .cfi_pop	%rbx
 	pop	%rbp
 .cfi_pop	%rbp
-.Lgcm_dec_abort:
 	ret
 .seh_endproc
 .cfi_endproc
@@ -727,13 +723,10 @@ aesni_gcm_encrypt:
 .extern	BORINGSSL_function_hit
 	movb \$1,BORINGSSL_function_hit+2(%rip)
 #endif
-	xor	%rax,%rax
-
 	# We call |_aesni_ctr32_6x| twice, each call consuming 96 bytes of
 	# input. Then we call |_aesni_ctr32_ghash_6x|, which requires at
-	# least 96 more bytes of input.
-	cmp	\$0x60*3,$len			# minimal accepted length
-	jb	.Lgcm_enc_abort
+	# least 96 more bytes of input. Unlike upstream, we require the
+	# caller to check this.
 
 	push	%rbp
 .cfi_push	%rbp
@@ -1067,7 +1060,6 @@ $code.=<<___;
 .cfi_pop	%rbx
 	pop	%rbp
 .cfi_pop	%rbp
-.Lgcm_enc_abort:
 	ret
 .seh_endproc
 .cfi_endproc
@@ -1090,26 +1082,6 @@ $code.=<<___;
 .asciz	"AES-NI GCM module for x86_64, CRYPTOGAMS by <appro\@openssl.org>"
 .align	64
 .text
-___
-}}} else {{{
-$code=<<___;	# assembler is too old
-.text
-
-.globl	aesni_gcm_encrypt
-.type	aesni_gcm_encrypt,\@abi-omnipotent
-aesni_gcm_encrypt:
-	_CET_ENDBR
-	xor	%eax,%eax
-	ret
-.size	aesni_gcm_encrypt,.-aesni_gcm_encrypt
-
-.globl	aesni_gcm_decrypt
-.type	aesni_gcm_decrypt,\@abi-omnipotent
-aesni_gcm_decrypt:
-	_CET_ENDBR
-	xor	%eax,%eax
-	ret
-.size	aesni_gcm_decrypt,.-aesni_gcm_decrypt
 ___
 }}}
 

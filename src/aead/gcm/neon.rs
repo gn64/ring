@@ -17,10 +17,8 @@
     all(target_arch = "arm", target_endian = "little")
 ))]
 
-use super::{HTable, KeyValue, UpdateBlock, UpdateBlocks, Xi, BLOCK_LEN};
-use crate::{cpu, polyfill::slice::AsChunks};
-
-pub(in super::super) type RequiredCpuFeatures = cpu::arm::Neon;
+use super::{ffi, HTable, KeyValue, UpdateBlock, UpdateBlocks, Xi, BLOCK_LEN};
+use crate::{c, cpu, polyfill::slice::AsChunks};
 
 #[derive(Clone)]
 pub struct Key {
@@ -28,9 +26,23 @@ pub struct Key {
 }
 
 impl Key {
-    pub(in super::super) fn new(value: KeyValue, _cpu: RequiredCpuFeatures) -> Self {
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    pub(in super::super) fn new(value: KeyValue, _cpu: cpu::aarch64::Neon) -> Self {
+        prefixed_extern! {
+            fn gcm_init_neon(HTable: *mut HTable, h: &KeyValue);
+        }
         Self {
-            h_table: unsafe { htable_new!(gcm_init_neon, value) },
+            h_table: HTable::new(|table| unsafe { gcm_init_neon(table, &value) }),
+        }
+    }
+
+    #[cfg(all(target_arch = "arm", target_endian = "little"))]
+    pub(in super::super) fn new(value: KeyValue, _cpu: cpu::arm::Neon) -> Self {
+        prefixed_extern! {
+            fn gcm_init_neon(HTable: *mut HTable, h: &KeyValue);
+        }
+        Self {
+            h_table: HTable::new(|table| unsafe { gcm_init_neon(table, &value) }),
         }
     }
 }
@@ -47,6 +59,17 @@ impl UpdateBlock for Key {
 
 impl UpdateBlocks for Key {
     fn update_blocks(&self, xi: &mut Xi, input: AsChunks<u8, BLOCK_LEN>) {
-        unsafe { ghash!(gcm_ghash_neon, xi, &self.h_table, input) }
+        prefixed_extern! {
+            fn gcm_ghash_neon(
+                xi: &mut Xi,
+                Htable: &HTable,
+                inp: *const u8,
+                len: c::NonZero_size_t,
+            );
+        }
+        let htable = &self.h_table;
+        ffi::with_non_dangling_ptr(input, |input, len| unsafe {
+            gcm_ghash_neon(xi, htable, input, len)
+        });
     }
 }

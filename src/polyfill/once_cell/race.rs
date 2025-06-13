@@ -19,30 +19,111 @@
 //! `Acquire` and `Release` have very little performance overhead on most
 //! architectures versus `Relaxed`.
 
-use core::sync::atomic;
+// The "atomic orderings" section of the documentation above promises
+// "happens-before" semantics. This drives the choice of orderings in the uses
+// of `compare_exchange` below. On success, the value was zero/null, so there
+// was nothing to acquire (there is never any `Ordering::Release` store of 0).
+// On failure, the value was nonzero, so it was initialized previously (perhaps
+// on another thread) using `Ordering::Release`, so we must use
+// `Ordering::Acquire` to ensure that store "happens-before" this load.
 
-use atomic::{AtomicUsize, Ordering};
+use cfg_if::cfg_if;
+use core::marker::PhantomData;
 use core::num::NonZeroUsize;
+use core::sync::atomic::{self, AtomicUsize};
 
-/// A thread-safe cell which can be written to only once.
-pub struct OnceNonZeroUsize {
-    inner: AtomicUsize,
+pub trait Ordering {
+    const ACQUIRE: atomic::Ordering;
+    const RELEASE: atomic::Ordering;
 }
 
-impl OnceNonZeroUsize {
+cfg_if! {
+    if #[cfg(any(all(target_arch = "arm", target_endian = "little"),
+                 target_arch = "x86",
+                 target_arch = "x86_64"))]
+    {
+        pub struct AcquireRelease(());
+
+        impl Ordering for AcquireRelease {
+            const ACQUIRE: atomic::Ordering = atomic::Ordering::Acquire;
+            const RELEASE: atomic::Ordering = atomic::Ordering::Release;
+        }
+    }
+}
+
+cfg_if! {
+    if #[cfg(all(target_arch = "aarch64", target_endian = "little"))] {
+        pub struct Relaxed(());
+
+        impl Ordering for Relaxed {
+            const ACQUIRE: atomic::Ordering = atomic::Ordering::Relaxed;
+            const RELEASE: atomic::Ordering = atomic::Ordering::Relaxed;
+        }
+    }
+}
+
+/// A thread-safe cell which can be written to only once.
+pub struct OnceNonZeroUsize<O> {
+    inner: AtomicUsize,
+    ordering: PhantomData<O>,
+}
+
+impl<O: Ordering> OnceNonZeroUsize<O> {
     /// Creates a new empty cell.
     #[inline]
-    pub const fn new() -> OnceNonZeroUsize {
-        OnceNonZeroUsize {
+    pub const fn new() -> Self {
+        Self {
             inner: AtomicUsize::new(0),
+            ordering: PhantomData,
         }
     }
 
     /// Gets the underlying value.
     #[inline]
     pub fn get(&self) -> Option<NonZeroUsize> {
-        let val = self.inner.load(Ordering::Acquire);
+        let val = self.inner.load(O::ACQUIRE);
         NonZeroUsize::new(val)
+    }
+
+    /// Get the reference to the underlying value, without checking if the cell
+    /// is initialized.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure that the cell is in initialized state, and that
+    /// the contents are acquired by (synchronized to) this thread.
+    pub unsafe fn get_unchecked(&self) -> NonZeroUsize {
+        #[inline(always)]
+        fn as_const_ptr(r: &AtomicUsize) -> *const usize {
+            use core::mem::align_of;
+
+            let p: *const AtomicUsize = r;
+            // SAFETY: "This type has the same size and bit validity as
+            // the underlying integer type, usize. However, the alignment of
+            // this type is always equal to its size, even on targets where
+            // usize has a lesser alignment."
+            const _ALIGNMENT_COMPATIBLE: () =
+                assert!(align_of::<AtomicUsize>() % align_of::<usize>() == 0);
+            p.cast::<usize>()
+        }
+
+        // TODO(MSRV-1.70): Use `AtomicUsize::as_ptr().cast_const()`
+        // See https://github.com/rust-lang/rust/issues/138246.
+        let p = as_const_ptr(&self.inner);
+
+        // SAFETY: The caller is responsible for ensuring that the value
+        // was initialized and that the contents have been acquired by
+        // this thread. Assuming that, we can assume there will be no
+        // conflicting writes to the value since the value will never
+        // change once initialized. This relies on the statement in
+        // https://doc.rust-lang.org/1.83.0/core/sync/atomic/ that "(A
+        // `compare_exchange` or `compare_exchange_weak` that does not
+        // succeed is not considered a write."
+        let val = unsafe { p.read() };
+
+        // SAFETY: The caller is responsible for ensuring the value is
+        // initialized and thus not zero.
+        unsafe { NonZeroUsize::new_unchecked(val) }
     }
 
     /// Gets the contents of the cell, initializing it with `f` if the cell was
@@ -55,8 +136,7 @@ impl OnceNonZeroUsize {
     where
         F: FnOnce() -> NonZeroUsize,
     {
-        let val = self.inner.load(Ordering::Acquire);
-        match NonZeroUsize::new(val) {
+        match self.get() {
             Some(it) => it,
             None => self.init(f),
         }
@@ -65,13 +145,17 @@ impl OnceNonZeroUsize {
     #[cold]
     #[inline(never)]
     fn init(&self, f: impl FnOnce() -> NonZeroUsize) -> NonZeroUsize {
-        let mut val = f().get();
-        let exchange = self
-            .inner
-            .compare_exchange(0, val, Ordering::AcqRel, Ordering::Acquire);
-        if let Err(old) = exchange {
+        let nz = f();
+        let mut val = nz.get();
+        if let Err(old) = self.compare_exchange(nz) {
             val = old;
         }
         unsafe { NonZeroUsize::new_unchecked(val) }
+    }
+
+    #[inline(always)]
+    fn compare_exchange(&self, val: NonZeroUsize) -> Result<usize, usize> {
+        self.inner
+            .compare_exchange(0, val.get(), O::RELEASE, O::ACQUIRE)
     }
 }

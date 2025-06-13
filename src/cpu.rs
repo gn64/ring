@@ -62,9 +62,6 @@ macro_rules! impl_get_feature {
             #[cfg(target_arch = "x86_64")]
             IntelCpu,
 
-            #[cfg(any(all(target_arch = "aarch64", target_endian = "little"),
-                     all(target_arch = "arm", target_endian = "little"),
-                     target_arch = "x86", target_arch = "x86_64"))]
             // Synthesized to ensure the dynamic flag set is always non-zero.
             //
             // Keep this at the end as it is never checked except during init.
@@ -186,7 +183,13 @@ mod features {
 const _: () = assert!(size_of::<Features>() == 0);
 
 cfg_if::cfg_if! {
-    if #[cfg(any(all(target_arch = "aarch64", target_endian = "little"), all(target_arch = "arm", target_endian = "little")))] {
+    // Don't guard the aarch64/arm branches on `target_endian = "little"`
+    // because each module contains static assertions for endianness that
+    // we don't want to skip over.
+    if #[cfg(target_arch = "aarch64")] {
+        pub mod aarch64;
+        use aarch64::featureflags;
+    } else if #[cfg(target_arch = "arm")] {
         pub mod arm;
         use arm::featureflags;
     } else if #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] {

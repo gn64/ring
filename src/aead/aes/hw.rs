@@ -19,22 +19,7 @@
 ))]
 
 use super::{Block, Counter, EncryptBlock, EncryptCtr32, Iv, KeyBytes, Overlapping, AES_KEY};
-use crate::{cpu, error};
-use cfg_if::cfg_if;
-
-cfg_if! {
-    if #[cfg(all(target_arch = "aarch64", target_endian = "little"))] {
-        pub(in super::super) type RequiredCpuFeatures = cpu::arm::Aes;
-        pub(in super::super) type OptionalCpuFeatures = ();
-    } else if #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] {
-        use cpu::intel::{Aes, Avx, Ssse3};
-        // Some functions seem to have been written to require only SSE/SSE2
-        // but there seem to be no SSSE3-less CPUs with AES-NI, and we don't
-        // have feature detection for SSE2.
-        pub(in super::super) type RequiredCpuFeatures = (Aes, Ssse3);
-        pub(in super::super) type OptionalCpuFeatures = Avx;
-    }
-}
+use crate::cpu;
 
 #[derive(Clone)]
 pub struct Key {
@@ -45,27 +30,50 @@ impl Key {
     #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
     pub(in super::super) fn new(
         bytes: KeyBytes<'_>,
-        _required_cpu_features: RequiredCpuFeatures,
-        _optional_cpu_features: Option<OptionalCpuFeatures>,
-    ) -> Result<Self, error::Unspecified> {
-        let inner = unsafe { set_encrypt_key!(aes_hw_set_encrypt_key, bytes) }?;
-        Ok(Self { inner })
+        _required_cpu_features: cpu::aarch64::Aes,
+        _optional_cpu_features: Option<()>,
+    ) -> Self {
+        Self {
+            inner: unsafe { set_encrypt_key!(aes_hw_set_encrypt_key, bytes) },
+        }
     }
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86")]
     pub(in super::super) fn new(
         bytes: KeyBytes<'_>,
-        (Aes { .. }, Ssse3 { .. }): RequiredCpuFeatures,
-        optional_cpu_features: Option<OptionalCpuFeatures>,
-    ) -> Result<Self, error::Unspecified> {
+        _required_cpu_features: (cpu::intel::Aes, cpu::intel::Ssse3),
+        optional_cpu_features: Option<cpu::intel::Avx>,
+    ) -> Self {
         // Ssse3 is required, but upstream only uses this if there is also Avx;
         // presumably the base version is faster on pre-AVX CPUs.
-        let inner = if let Some(Avx { .. }) = optional_cpu_features {
-            unsafe { set_encrypt_key!(aes_hw_set_encrypt_key_alt, bytes) }?
+        if let Some(cpu::intel::Avx { .. }) = optional_cpu_features {
+            Self {
+                inner: unsafe { set_encrypt_key!(aes_hw_set_encrypt_key_alt, bytes) },
+            }
         } else {
-            unsafe { set_encrypt_key!(aes_hw_set_encrypt_key_base, bytes) }?
-        };
-        Ok(Self { inner })
+            Self {
+                inner: unsafe { set_encrypt_key!(aes_hw_set_encrypt_key_base, bytes) },
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(in super::super) fn new(
+        bytes: KeyBytes<'_>,
+        _required_cpu_features: (cpu::intel::Aes, cpu::intel::Ssse3),
+        optional_cpu_features: Option<cpu::intel::Avx>,
+    ) -> Self {
+        // Ssse3 is required, but upstream only uses this if there is also Avx;
+        // presumably the base version is faster on pre-AVX CPUs.
+        if let Some(cpu::intel::Avx { .. }) = optional_cpu_features {
+            Self {
+                inner: unsafe { set_encrypt_key!(aes_hw_set_encrypt_key_alt, bytes) },
+            }
+        } else {
+            Self {
+                inner: unsafe { set_encrypt_key!(aes_hw_set_encrypt_key_base, bytes) },
+            }
+        }
     }
 
     #[cfg(any(

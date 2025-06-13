@@ -30,18 +30,59 @@ use std::{
 mod env {
     use std::ffi::OsString;
 
-    /// Read an environment variable and tell Cargo that we depend on it.
-    ///
-    /// The name is static since we intend to only read a static set of environment
-    /// variables.
-    pub fn var_os(name: &'static str) -> Option<OsString> {
-        println!("cargo:rerun-if-env-changed={}", name);
-        std::env::var_os(name)
+    macro_rules! define_env {
+        { $vis:vis $NAME:ident : $ty:ident } => {
+            $vis const $NAME: EnvVar = EnvVar {
+                name: stringify!($NAME),
+                ty: EnvVarTy::$ty,
+            };
+        };
     }
 
-    pub fn var(name: &'static str) -> Option<String> {
-        var_os(name).and_then(|value| value.into_string().ok())
+    enum EnvVarTy {
+        RerunIfChanged,
+        SetByCargo,
     }
+
+    pub struct EnvVar {
+        pub name: &'static str,
+        ty: EnvVarTy,
+    }
+
+    /// Read an environment variable and optionally tell Cargo that we depend on it.
+    ///
+    /// The env var is static since we intend to only read a static set of environment
+    /// variables.
+    pub fn var_os(env_var: &'static EnvVar) -> Option<OsString> {
+        match env_var.ty {
+            EnvVarTy::RerunIfChanged => {
+                println!("cargo:rerun-if-env-changed={}", env_var.name);
+            }
+            EnvVarTy::SetByCargo => {}
+        }
+        std::env::var_os(env_var.name)
+    }
+
+    pub fn var(env_var: &'static EnvVar) -> Option<String> {
+        var_os(env_var).and_then(|value| value.into_string().ok())
+    }
+
+    // In alphabetical order
+    define_env! { pub CARGO_CFG_TARGET_ARCH: SetByCargo }
+    define_env! { pub CARGO_CFG_TARGET_ENDIAN: SetByCargo }
+    define_env! { pub CARGO_CFG_TARGET_ENV: SetByCargo }
+    define_env! { pub CARGO_CFG_TARGET_OS: SetByCargo }
+    define_env! { pub CARGO_MANIFEST_DIR: SetByCargo }
+    define_env! { pub CARGO_MANIFEST_LINKS: SetByCargo }
+    define_env! { pub CARGO_PKG_NAME: SetByCargo }
+    define_env! { pub CARGO_PKG_VERSION_MAJOR: SetByCargo }
+    define_env! { pub CARGO_PKG_VERSION_MINOR: SetByCargo }
+    define_env! { pub CARGO_PKG_VERSION_PATCH: SetByCargo }
+    define_env! { pub CARGO_PKG_VERSION_PRE: SetByCargo }
+    define_env! { pub DEBUG: SetByCargo }
+    define_env! { pub OUT_DIR: SetByCargo }
+    define_env! { pub PERL_EXECUTABLE: RerunIfChanged }
+    define_env! { pub RING_PREGENERATE_ASM: RerunIfChanged }
 }
 
 const X86: &str = "x86";
@@ -53,7 +94,6 @@ const WASM32: &str = "wasm32";
 #[rustfmt::skip]
 const RING_SRCS: &[(&[&str], &str)] = &[
     (&[], "crypto/curve25519/curve25519.c"),
-    (&[], "crypto/fipsmodule/aes/aes_nohw.c"),
     (&[], "crypto/fipsmodule/bn/montgomery.c"),
     (&[], "crypto/fipsmodule/bn/montgomery_inv.c"),
     (&[], "crypto/fipsmodule/ec/ecp_nistz.c"),
@@ -61,12 +101,8 @@ const RING_SRCS: &[(&[&str], &str)] = &[
     (&[], "crypto/fipsmodule/ec/gfp_p384.c"),
     (&[], "crypto/fipsmodule/ec/p256.c"),
     (&[], "crypto/limbs/limbs.c"),
-    (&[], "crypto/mem.c"),
-    (&[], "crypto/poly1305/poly1305.c"),
 
     (&[ARM, X86_64, X86], "crypto/crypto.c"),
-
-    (&[X86_64, X86], "crypto/cpu_intel.c"),
 
     (&[X86], "crypto/fipsmodule/aes/asm/aesni-x86.pl"),
     (&[X86], "crypto/fipsmodule/aes/asm/ghash-x86.pl"),
@@ -265,51 +301,50 @@ fn main() {
     // Avoid assuming the working directory is the same is the $CARGO_MANIFEST_DIR so that toolchains
     // which may assume other working directories can still build this code.
     let c_root_dir = PathBuf::from(
-        env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR should always be set"),
+        env::var_os(&env::CARGO_MANIFEST_DIR).expect("CARGO_MANIFEST_DIR should always be set"),
     );
 
     // Keep in sync with `core_name_and_version!` in prefixed.rs.
     let core_name_and_version = [
-        &env::var("CARGO_PKG_NAME").unwrap(),
+        &env::var(&env::CARGO_PKG_NAME).unwrap(),
         "core",
-        &env::var("CARGO_PKG_VERSION_MAJOR").unwrap(),
-        &env::var("CARGO_PKG_VERSION_MINOR").unwrap(),
-        &env::var("CARGO_PKG_VERSION_PATCH").unwrap(),
-        &env::var("CARGO_PKG_VERSION_PRE").unwrap(), // Often empty
+        &env::var(&env::CARGO_PKG_VERSION_MAJOR).unwrap(),
+        &env::var(&env::CARGO_PKG_VERSION_MINOR).unwrap(),
+        &env::var(&env::CARGO_PKG_VERSION_PATCH).unwrap(),
+        &env::var(&env::CARGO_PKG_VERSION_PRE).unwrap(), // Often empty
     ]
     .join("_");
     // Ensure `links` in Cargo.toml is consistent with the version.
     assert_eq!(
-        &env::var("CARGO_MANIFEST_LINKS").unwrap(),
+        &env::var(&env::CARGO_MANIFEST_LINKS).unwrap(),
         &core_name_and_version
     );
 
-    const RING_PREGENERATE_ASM: &str = "RING_PREGENERATE_ASM";
-    match env::var_os(RING_PREGENERATE_ASM).as_deref() {
+    match env::var_os(&env::RING_PREGENERATE_ASM).as_deref() {
         Some(s) if s == "1" => {
             pregenerate_asm_main(&c_root_dir, &core_name_and_version);
         }
         None => ring_build_rs_main(&c_root_dir, &core_name_and_version),
         _ => {
-            panic!("${} has an invalid value", RING_PREGENERATE_ASM);
+            panic!("${} has an invalid value", &env::RING_PREGENERATE_ASM.name);
         }
     }
 }
 
 fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str) {
-    let out_dir = env::var_os("OUT_DIR").unwrap();
+    let out_dir = env::var_os(&env::OUT_DIR).unwrap();
     let out_dir = PathBuf::from(out_dir);
 
-    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
-    let os = env::var("CARGO_CFG_TARGET_OS").unwrap();
-    let env = env::var("CARGO_CFG_TARGET_ENV").unwrap();
-    let endian = env::var("CARGO_CFG_TARGET_ENDIAN").unwrap();
+    let arch = env::var(&env::CARGO_CFG_TARGET_ARCH).unwrap();
+    let os = env::var(&env::CARGO_CFG_TARGET_OS).unwrap();
+    let env = env::var(&env::CARGO_CFG_TARGET_ENV).unwrap();
+    let endian = env::var(&env::CARGO_CFG_TARGET_ENDIAN).unwrap();
     let is_little_endian = endian == "little";
 
     let is_git = fs::metadata(c_root_dir.join(".git")).is_ok();
 
     // Published builds are always built in release mode.
-    let is_debug = is_git && env::var("DEBUG").unwrap() != "false";
+    let is_debug = is_git && env::var(&env::DEBUG).unwrap() != "false";
 
     // During local development, force warnings in non-Rust code to be treated
     // as errors. Since warnings are highly compiler-dependent and compilers
@@ -735,10 +770,10 @@ fn join_components_with_forward_slashes(path: &Path) -> OsString {
 }
 
 fn get_perl_exe() -> PathBuf {
-    get_command("PERL_EXECUTABLE", "perl")
+    get_command(&env::PERL_EXECUTABLE, "perl")
 }
 
-fn get_command(var: &'static str, default: &str) -> PathBuf {
+fn get_command(var: &'static env::EnvVar, default: &str) -> PathBuf {
     PathBuf::from(env::var_os(var).unwrap_or_else(|| default.into()))
 }
 
@@ -860,7 +895,6 @@ fn prefix_all_symbols(pp: char, prefix_prefix: &str, prefix: &str) -> String {
     static SYMBOLS_TO_PREFIX: &[&str] = &[
         "adx_bmi2_available",
         "avx2_available",
-        "CRYPTO_memcmp",
         "CRYPTO_poly1305_finish",
         "CRYPTO_poly1305_finish_neon",
         "CRYPTO_poly1305_init",
@@ -885,7 +919,6 @@ fn prefix_all_symbols(pp: char, prefix_prefix: &str, prefix: &str) -> String {
         "LIMBS_window5_split_window",
         "LIMBS_window5_unsplit_window",
         "LIMB_shr",
-        "OPENSSL_cpuid_setup",
         "aes_gcm_dec_kernel",
         "aes_gcm_dec_update_vaes_avx2",
         "aes_gcm_enc_kernel",
@@ -894,9 +927,6 @@ fn prefix_all_symbols(pp: char, prefix_prefix: &str, prefix: &str) -> String {
         "aes_hw_set_encrypt_key",
         "aes_hw_set_encrypt_key_alt",
         "aes_hw_set_encrypt_key_base",
-        "aes_nohw_ctr32_encrypt_blocks",
-        "aes_nohw_encrypt",
-        "aes_nohw_set_encrypt_key",
         "aesni_gcm_decrypt",
         "aesni_gcm_encrypt",
         "bn_from_montgomery_in_place",

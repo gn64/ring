@@ -74,9 +74,9 @@ jobs:
             ~/.cargo/bin/cargo-semver-checks
             ~/.cargo/.crates.toml
             ~/.cargo/.crates2.json
-          key: ${{ runner.os }}-v2-cargo-semver-checks-0.37.0
+          key: ${{ runner.os }}-v2-cargo-semver-checks-0.41.0
 
-      - run: cargo install cargo-semver-checks --locked --vers "0.37.0"
+      - run: cargo install cargo-semver-checks --locked --vers "0.41.0"
 
       - uses: briansmith/actions-checkout@v4
         with:
@@ -252,9 +252,14 @@ jobs:
             cargo_options: --no-run
 
           - target: aarch64-pc-windows-msvc
-            host_os: windows-latest
-            # GitHub Actions doesn't have a way to run this target yet.
-            cargo_options: --no-run
+            host_os: windows-11-arm
+
+          - target: aarch64-pc-windows-msvc
+            host_os: windows-11-arm
+            rust_channel: 1.66.0
+            mode: --release
+            # XXX: https://github.com/briansmith/ring/issues/2536
+            cargo_test_options: -- --skip=test_rsakeypair_private_exponent
 
           - target: aarch64-unknown-linux-gnu
             host_os: ubuntu-22.04
@@ -352,27 +357,30 @@ jobs:
         with:
           persist-credentials: false
 
+      # From https://github.com/actions/partner-runner-images/issues/77
+      - if: ${{ contains(matrix.host_os, 'windows') && contains(matrix.host_os, 'arm') }}
+        run: |
+          curl -LOs https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe
+            ./rustup-init.exe -y --default-toolchain none --no-modify-path
+          echo "$USERPROFILE/.cargo/bin" >> "$GITHUB_PATH"
+        shell: sh
+
       - run: mk/install-build-tools.sh +${{ matrix.rust_channel }} --target=${{ matrix.target }}
         shell: sh
 
-      - if: ${{ contains(matrix.host_os, 'windows') }}
+      - if: ${{ contains(matrix.host_os, 'windows') && contains(matrix.target, '86') }}
         run: ./mk/install-build-tools.ps1
-
-      - if: ${{ matrix.target == 'aarch64-pc-windows-msvc' }}
-        run: |
-          echo "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Tools\Llvm\x64\bin" >> $GITHUB_PATH
-        shell: bash
 
       - if: ${{ matrix.xcode_version != '' }}
         run: sudo xcode-select -s /Applications/Xcode_${{ matrix.xcode_version }}.app
 
       - if: ${{ !contains(matrix.host_os, 'windows') }}
         run: |
-          mk/cargo.sh +${{ matrix.rust_channel }} test -vv --target=${{ matrix.target }} ${{ matrix.cargo_options }} ${{ matrix.features }} ${{ matrix.mode }}
+          mk/cargo.sh +${{ matrix.rust_channel }} test -vv --target=${{ matrix.target }} ${{ matrix.cargo_options }} ${{ matrix.features }} ${{ matrix.mode }} ${{ matrix.cargo_test_options }}
 
       - if: ${{ contains(matrix.host_os, 'windows') }}
         run: |
-          cargo +${{ matrix.rust_channel }} test -vv --target=${{ matrix.target }} ${{ matrix.cargo_options }} ${{ matrix.features }} ${{ matrix.mode }}
+          cargo +${{ matrix.rust_channel }} test -vv --target=${{ matrix.target }} ${{ matrix.cargo_options }} ${{ matrix.features }} ${{ matrix.mode }} ${{ matrix.cargo_test_options }}
 
       # Check that all the needed symbol renaming was done.
       # TODO: Do this check on Windows too.
@@ -482,27 +490,21 @@ jobs:
       - run: mk/install-build-tools.sh +${{ matrix.rust_channel }} --target=${{ matrix.target }}
         shell: sh
 
-      - if: ${{ contains(matrix.host_os, 'windows') }}
+      - if: ${{ contains(matrix.host_os, 'windows') && contains(matrix.target, '86') }}
         run: ./mk/install-build-tools.ps1
 
-      - if: ${{ matrix.target == 'aarch64-pc-windows-msvc' }}
+      - if: ${{ matrix.target == 'aarch64-pc-windows-msvc' && !contains(matrix.host_os, 'arm') }}
         run: |
           echo "C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Tools\Llvm\x64\bin" >> $GITHUB_PATH
         shell: bash
 
       - if: ${{ !contains(matrix.host_os, 'windows') }}
         run: |
-          mk/cargo.sh +${{ matrix.rust_channel }} test -vv --target=${{ matrix.target }} ${{ matrix.cargo_options }} ${{ matrix.features }} ${{ matrix.mode }}
+          mk/cargo.sh +${{ matrix.rust_channel }} test --lib --tests -vv --target=${{ matrix.target }} ${{ matrix.cargo_options }} ${{ matrix.features }} ${{ matrix.mode }} ${{ matrix.cargo_test_options }}
 
       - if: ${{ contains(matrix.host_os, 'windows') }}
         run: |
-          cargo +${{ matrix.rust_channel }} test -vv --target=${{ matrix.target }} ${{ matrix.cargo_options }} ${{ matrix.features }} ${{ matrix.mode }}
-
-      # --all-targets doesn't run doctests: https://github.com/rust-lang/cargo/issues/6669
-      # Run doctests only on x86_64 to avoid cross-compilation hassles with `--no-run`.
-      - if: ${{ !contains(matrix.host_os, 'windows') && contains(matrix.target, 'x86_64') }}
-        run: |
-          mk/cargo.sh +${{ matrix.rust_channel }} test -vv --doc --target=${{ matrix.target }} ${{ matrix.cargo_options }} ${{ matrix.features }} ${{ matrix.mode }}
+          cargo +${{ matrix.rust_channel }} test --lib --tests -vv --target=${{ matrix.target }} ${{ matrix.cargo_options }} ${{ matrix.features }} ${{ matrix.mode }} ${{ matrix.cargo_test_options }}
 
       # Check that all the needed symbol renaming was done.
       # TODO: Do this check on Windows too.
@@ -561,7 +563,7 @@ jobs:
       - run: mk/install-build-tools.sh +${{ matrix.rust_channel }} --target=${{ matrix.target }}
         shell: sh
 
-      - if: ${{ contains(matrix.host_os, 'windows') }}
+      - if: ${{ contains(matrix.host_os, 'windows') && contains(matrix.target, '86') }}
         run: ./mk/install-build-tools.ps1
 
       - run: cargo +${{ matrix.rust_channel }} generate-lockfile
@@ -810,12 +812,12 @@ jobs:
       - run: RING_CPU_MODEL=${{ matrix.cpu_model }} RING_COVERAGE=1 mk/install-build-tools.sh +${{ matrix.rust_channel }} --target=${{ matrix.target }}
         shell: sh
 
-      - if: ${{ contains(matrix.host_os, 'windows') }}
+      - if: ${{ contains(matrix.host_os, 'windows') && contains(matrix.target, '86') }}
         run: ./mk/install-build-tools.ps1
 
       - if: ${{ !contains(matrix.host_os, 'windows') }}
         run: |
-          RING_CPU_MODEL=${{ matrix.cpu_model }} RING_COVERAGE=1 mk/cargo.sh +${{ matrix.rust_channel }} test -vv --target=${{ matrix.target }} ${{ matrix.cargo_options }} ${{ matrix.features }} ${{ matrix.mode }}
+          RING_CPU_MODEL=${{ matrix.cpu_model }} RING_COVERAGE=1 mk/cargo.sh +${{ matrix.rust_channel }} test --lib --tests -vv --target=${{ matrix.target }} ${{ matrix.cargo_options }} ${{ matrix.features }} ${{ matrix.mode }} ${{ matrix.cargo_test_options }}
 
       - uses: briansmith/codecov-codecov-action@v4
         with:
